@@ -1,0 +1,58 @@
+name: Sync & Backup IPTV Playlist
+
+on:
+  schedule:
+    - cron: '*/15 * * * *' # Tự động chạy mỗi 15 phút
+  workflow_dispatch:      # Cho phép bấm nút kích hoạt thủ công bất kỳ lúc nào
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch and validate upstream playlist
+        run: |
+          UPSTREAM_URL="https://raw.githubusercontent.com/ntd249/ntdiptv/main/fptudp"
+          TEMP_FILE="temp_playlist"
+          
+          # Tải file từ nguồn gốc
+          HTTP_STATUS=$(curl -sL -w "%{http_code}" -o "$TEMP_FILE" "$UPSTREAM_URL")
+          
+          # Kiểm tra tính toàn vẹn (HTTP status 200 và dung lượng tối thiểu > 500 byte)
+          FILE_SIZE=$(wc -c < "$TEMP_FILE" || echo 0)
+          
+          if [ "$HTTP_STATUS" -ne 200 ] || [ "$FILE_SIZE" -lt 500 ]; then
+            echo "CẢNH BÁO: Nguồn gốc lỗi hoặc bị xóa (HTTP $HTTP_STATUS, Size: $FILE_SIZE bytes). Dữ liệu hiện tại được giữ nguyên."
+            exit 0
+          fi
+          
+          # Cập nhật danh sách chính
+          mv "$TEMP_FILE" fptudp
+          
+          # Lưu bản sao lưu theo ngày
+          mkdir -p backup
+          TODAY=$(date +'%Y-%m-%d')
+          cp fptudp "backup/fptudp-$TODAY"
+          
+          # Xóa các bản snapshot cũ hơn 30 ngày trong thư mục backup
+          find backup/ -name "fptudp-*" -type f -mtime +30 -delete
+
+      - name: Commit and Push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action Bot"
+          
+          if [ -n "$(git status --porcelain)" ]; then
+            git add fptudp backup/
+            git commit -m "Auto sync: $(date +'%Y-%m-%d %H:%M:%S')"
+            git push
+          else
+            echo "Không có thay đổi nào mới từ nguồn gốc."
+          fi
